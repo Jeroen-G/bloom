@@ -79,7 +79,7 @@ final class ComposerModelCatalog {
 
     /// The model menu: one section per backend that can actually run a chat, in `AgentKind` order.
     ///
-    /// Cursor and OpenCode are detected and configurable and have no runner, so they are not here.
+    /// Cursor has no runner, so it is not here. OpenCode has a runner and can run workspaces.
     /// A backend whose list has not arrived yet is left out rather than shown empty, because an
     /// empty section is a heading over nothing.
     func sections(includingCurrent current: String, on kind: AgentKind) -> [ComposerModelSection] {
