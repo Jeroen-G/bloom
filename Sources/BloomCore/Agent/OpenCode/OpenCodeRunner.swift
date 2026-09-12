@@ -8,7 +8,6 @@ import os
 /// moment it arrives so a crashed app can resume, every event written to the store before it
 /// reaches the UI, and the same permission bookkeeping. What it is not is a second code path
 /// inside `GrokRunner`. The two backends share the same ACP protocol, only the CLI differs.
-/// One connection per chat. The per-chat lifetime already matches what the workspace manages.
 public actor OpenCodeRunner: SessionRunner {
     public nonisolated let agentKind = AgentKind.openCode
     public nonisolated let workspacePath: String
