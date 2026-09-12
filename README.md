@@ -55,8 +55,9 @@ Bloom ships no agent of its own. It runs the CLIs you have installed:
 - `git`.
 - `gh` ([GitHub CLI](https://cli.github.com)), for the pull request and checks features.
 
-Cursor (`cursor-agent`) and OpenCode (`opencode`) are detected and reported on the Agents settings
-screen, but neither has a backend in Bloom, so neither is offered where a chat is started.
+Cursor (`cursor-agent`) is detected and reported on the Agents settings screen but has no
+backend in Bloom, so it is not offered where a chat is started. OpenCode (`opencode`) has full
+ACP-based integration and is offered alongside Claude Code, Codex, and Grok.
 
 ### Building from source
 
