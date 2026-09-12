@@ -8,10 +8,7 @@ import os
 /// moment it arrives so a crashed app can resume, every event written to the store before it
 /// reaches the UI, and the same permission bookkeeping. What it is not is a second code path
 /// inside `GrokRunner`. The two backends share the same ACP protocol, only the CLI differs.
-///
-/// **One connection per chat.** OpenCode ACP can carry several turns on one connection, which is
-/// tempting to share per workspace or per app, and would mean one crash taking down every OpenCode
-/// chat at once. The per-chat lifetime already matches what the workspace manages.
+/// One connection per chat. The per-chat lifetime already matches what the workspace manages.
 public actor OpenCodeRunner: SessionRunner {
     public nonisolated let agentKind = AgentKind.openCode
     public nonisolated let workspacePath: String
@@ -336,8 +333,7 @@ public actor OpenCodeRunner: SessionRunner {
         await save(session)
     }
 
-    /// Stop and quit answer pending asks as ACP `cancelled`, not `reject_always`. The latter can
-    /// persist a deny in OpenCode's session for a tool the user only meant to interrupt.
+    /// Stop and quit answer pending asks as ACP `cancelled`, not `reject_always`.
     private func filePendingAsks() async {
         for ask in pending.drain() {
             if let request = approvals[ask.requestID] {
@@ -454,7 +450,7 @@ public actor OpenCodeRunner: SessionRunner {
 // MARK: - Supporting Types
 
 /// Session information returned by OpenCode ACP.
-public struct OpenCodeSession: Sendable {
+public struct OpenCodeSession: Sendable, Hashable {
     public let id: String
     public let currentModelID: String
 
@@ -468,8 +464,6 @@ public struct OpenCodeSession: Sendable {
 public enum OpenCodePermission {
     /// Build a permission ask from a server request.
     public static func ask(for request: OpenCodeServerRequest, connectionID: UUID) -> PermissionAsk {
-        // Extract permission details from OpenCode ACP request
-        // OpenCode v2 uses permissions, shell, subagent as action types
         let action = request.params["action"]?.stringValue ?? ""
         let description = request.params["description"]?.stringValue ?? ""
         let toolUseID = request.params["toolUseId"]?.stringValue ?? request.id.turnID
@@ -517,9 +511,6 @@ extension BridgeRegistration {
     /// Build OpenCode-specific MCP server configuration.
     public static func opencodeServers(_ bridge: BridgeAttachment?) -> [String: JSONValue]? {
         guard let bridge else { return nil }
-        
-        // OpenCode ACP accepts mcpServers as part of session/new params
-        // Format based on OpenCode v2 ACP specification
         var servers: [String: JSONValue] = [:]
         
         if let config = bridge.mcpConfig {
@@ -534,7 +525,7 @@ extension BridgeRegistration {
     }
 }
 
-/// The live connection, where synchronous code can reach it. See `OpenCodeRunner.terminateNow`.
+/// The live connection, where synchronous code can reach it.
 private final class LiveConnection: Sendable {
     private let client = Mutex<OpenCodeClient?>(nil)
 
@@ -547,7 +538,6 @@ private final class LiveConnection: Sendable {
 
 // MARK: - OpenCodeEvent Extensions
 
-/// Extensions to OpenCodeEvent for compatibility with AgentEvent translation.
 extension OpenCodeEvent {
     /// Whether this event represents a closed connection.
     var isClosed: Bool {

@@ -61,7 +61,6 @@ public actor OpenCodeClient {
     public static let executable = "opencode"
     public static let arguments = ["acp"]
 
-    /// Build the launch configuration for the OpenCode ACP process.
     public static func launch(_ configuration: Configuration) -> AgentLaunch {
         var environment = configuration.environment
         // Disable auto-updater to prevent banners on stdout
@@ -83,8 +82,6 @@ public actor OpenCodeClient {
         if !configuration.model.isEmpty {
             arguments += ["--model", configuration.model]
         }
-        // Note: OpenCode v2 uses --variant for reasoning effort, not --effort
-        // This may need adjustment based on actual CLI behavior
         if !configuration.effort.isEmpty {
             arguments += ["--variant", configuration.effort]
         }
@@ -555,7 +552,7 @@ public enum OpenCodeEvent: Sendable {
 // MARK: - Session representation
 
 /// Session information returned by OpenCode ACP.
-public struct OpenCodeSession: Sendable {
+public struct OpenCodeSession: Sendable, Hashable {
     public let id: String
     public let currentModelID: String
 
@@ -577,7 +574,7 @@ public struct OpenCodeSession: Sendable {
 // MARK: - Model representation
 
 /// Represents a model available from OpenCode.
-public struct OpenCodeModel: Sendable, Hashable, Codable {
+public struct OpenCodeModel: Sendable, Hashable {
     public let id: String
     public let name: String
     public let provider: String
@@ -615,18 +612,8 @@ public struct OpenCodeModel: Sendable, Hashable, Codable {
 // MARK: - Bridge Registration for OpenCode
 
 extension BridgeRegistration {
-    /// Build OpenCode-specific MCP server arguments for bridge registration.
     public static func opencodeArguments(_ bridge: BridgeAttachment) -> [String] {
-        // OpenCode ACP accepts mcpServers as part of session/new params
-        // We need to check if OpenCode acp command supports direct MCP args
-        // For now, we'll pass via environment or config
-        // This may need adjustment based on actual OpenCode CLI behavior
         var args: [String] = []
-        
-        // If OpenCode supports --mcp-config or similar, add it here
-        // Based on docs, OpenCode uses config files for MCP servers
-        // So we may need to write a config file instead
-        
         return args
     }
 }

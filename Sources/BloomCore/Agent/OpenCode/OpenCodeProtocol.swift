@@ -224,13 +224,6 @@ public enum OpenCodeFrame: Sendable, Hashable {
 // MARK: - Outgoing frames
 
 /// Builds the lines Bloom writes to the OpenCode ACP server's stdin.
-///
-/// Strings rather than `Encodable` structs, because every one of these carries a `params` object
-/// whose members differ per method and are often optional in a way JSON null does not express:
-/// `sandbox: null` is not the same request as no `sandbox` at all.
-///
-/// Bloom sends `jsonrpc: "2.0"` even though the ACP spec says it's optional on the wire,
-/// because a server that ignores an extra member costs nothing and a strict one would need it.
 public enum OpenCodeOutgoing {
     /// JSON-RPC version to send
     static let version = "2.0"
@@ -269,8 +262,6 @@ public enum OpenCodeOutgoing {
 // MARK: - JSON helpers
 
 extension JSONValue {
-    /// One line of JSON, which is what a line-delimited transport needs. Slashes are left alone so
-    /// a path in a prompt stays readable in a log.
     public var compactJSON: String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]

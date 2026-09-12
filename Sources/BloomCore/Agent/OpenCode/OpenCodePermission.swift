@@ -1,11 +1,5 @@
 import Foundation
 
-/// OpenCode-specific permission handling.
-///
-/// OpenCode v2 uses ACP (Agent Client Protocol) which includes permission requests
-/// similar to Grok's implementation. This file provides the mapping between OpenCode's
-/// permission system and Bloom's unified permission handling.
-
 /// Permission request from OpenCode ACP.
 ///
 /// This is sent by OpenCode when it needs approval for an action (file read, command execution, etc.).
@@ -55,8 +49,6 @@ public struct OpenCodePermissionRequest: Sendable, Hashable {
 }
 
 /// Permission options for OpenCode.
-///
-/// OpenCode v2 supports various permission responses depending on the action type.
 public enum OpenCodePermissionOption: String, Sendable, Hashable, CaseIterable {
     case allow
     case deny
@@ -75,7 +67,6 @@ public enum OpenCodePermissionOption: String, Sendable, Hashable, CaseIterable {
     }
 }
 
-/// Permission handling utilities for OpenCode.
 public enum OpenCodePermission {
     /// Builds a Bloom PermissionAsk from an OpenCode permission request.
     public static func ask(for request: OpenCodeServerRequest, connectionID: UUID) -> PermissionAsk {
@@ -174,7 +165,6 @@ public extension PermissionAsk {
     }
 }
 
-/// Permission kind for OpenCode.
 public extension PermissionAskKind {
     static var openCodePermission: PermissionAskKind {
         PermissionAskKind(rawValue: "opencode") ?? .unknown
