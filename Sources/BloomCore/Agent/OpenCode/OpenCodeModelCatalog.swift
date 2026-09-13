@@ -41,6 +41,9 @@ public struct OpenCodeModel: Sendable, Hashable, Identifiable {
         )
     }
 
+    /// The bare model name, without its provider. Read by callers that only have the id.
+    public var name: String { displayName }
+
     /// Decode a model from JSON.
     public static func decode(_ json: JSONValue, currentModelID: String) -> OpenCodeModel? {
         let id = json["id"]?.stringValue ?? json["modelId"]?.stringValue
@@ -70,12 +73,30 @@ public struct OpenCodeModel: Sendable, Hashable, Identifiable {
     }
 
     /// Decode a list of models from JSON.
+    ///
+    /// OpenCode has been seen to advertise models two ways: as objects carrying an id, and as
+    /// bare `provider/model` strings. Both are accepted, because a list that silently came back
+    /// empty would look like an account with no models rather than a shape Bloom did not read.
     public static func decodeList(_ json: JSONValue) -> [OpenCodeModel] {
+        if let array = json.arrayValue {
+            return array.compactMap { item in
+                if let id = item.stringValue {
+                    let parts = id.split(separator: "/", maxSplits: 1)
+                    guard parts.count == 2 else { return nil }
+                    return OpenCodeModel(
+                        id: id,
+                        displayName: String(parts[1]),
+                        provider: String(parts[0])
+                    )
+                }
+                return decode(item, currentModelID: "")
+            }
+        }
+
         let current = json["currentModelId"]?.stringValue ?? json["currentModel"]?.stringValue ?? ""
         let items = json["models"]?.arrayValue
             ?? json["availableModels"]?.arrayValue
             ?? json["data"]?.arrayValue
-            ?? json.arrayValue
             ?? []
         return items.compactMap { decode($0, currentModelID: current) }
     }

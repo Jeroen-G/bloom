@@ -374,16 +374,6 @@ public enum PermissionMode: String, Sendable, Codable, CaseIterable {
     /// until somebody picks a model out of another section. `label(on:)` is the one to reach for
     /// wherever the agent is known.
     public var label: String { label(on: .claudeCode) }
-
-    /// The CLI value for this permission mode, used in ACP protocol.
-    public var cliValue: String {
-        switch self {
-        case .auto, .autoReview: "auto"
-        case .acceptEdits: "acceptEdits"
-        case .bypassPermissions: "bypassPermissions"
-        case .plan: "plan"
-        }
-    }
 }
 
 public struct Session: Identifiable, Sendable, Hashable, Codable {

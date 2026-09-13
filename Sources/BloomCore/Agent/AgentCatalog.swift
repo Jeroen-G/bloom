@@ -690,4 +690,5 @@ public actor AgentCatalog {
         if email != nil || name != nil { return account }
         return nil
     }
+}
 

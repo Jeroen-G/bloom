@@ -194,17 +194,9 @@ public actor OpenCodeClient {
             ])
         )
 
-        // Parse capabilities from initialize response
-        // OpenCode v2 advertises: loadSession, fork, resume, mcpCapabilities
-        let capabilities = result["capabilities"] ?? .object([:])
-        let sessionCapabilities = capabilities["sessionCapabilities"] ?? .object([:]) 
-        let loadSession = capabilities["loadSession"]?.boolValue ?? false
-        let fork = capabilities["fork"]?.boolValue ?? false
-        let resume = sessionCapabilities["resume"]?.boolValue ?? false
-
-        // Parse model information if available
-        // OpenCode may include model info in initialize response or via separate call
-        // For now, we'll fetch models via CLI if needed
+        // OpenCode v2 advertises: loadSession, fork, resume, mcpCapabilities. None of them change
+        // what Bloom does on this wire yet; the model state is the part worth keeping, below.
+        absorbModels(from: result)
 
         // Notify that handshake is complete
         notify("initialized", params: .object([:]))
@@ -245,7 +237,7 @@ public actor OpenCodeClient {
 
         let watchdog = Task { [weak self] in
             try await Task.sleep(for: timeout)
-            await self?.abandon(id, method: method, after: timeout)
+            await self?.abandon(id: id, method: method, after: timeout)
         }
 
         // For session/prompt, we don't wait for a response - it streams via notifications
@@ -260,7 +252,8 @@ public actor OpenCodeClient {
 
         return try await withTaskCancellationHandler(
             operation: {
-                try await withCheckedThrowingContinuation { continuation in
+                defer { watchdog.cancel() }
+                return try await withCheckedThrowingContinuation { continuation in
                     pending[id] = continuation
                     let line = OpenCodeOutgoing.request(id: id, method: method, params: params)
                     process?.writeLine(line)
@@ -269,12 +262,10 @@ public actor OpenCodeClient {
             onCancel: { [weak self] in
                 watchdog.cancel()
                 Task { [weak self] in
-                    await self?.abandon(id, method: method, after: .zero)
+                    await self?.abandon(id: id, method: method, after: .zero)
                 }
             }
-        ) { _ in
-            watchdog.cancel()
-        }
+        )
     }
 
     /// Send a notification (no response expected).
@@ -309,18 +300,19 @@ public actor OpenCodeClient {
     /// - Returns: OpenCodeSession with session ID and model info
     public func newSession(
         cwd: String? = nil,
-        mcpServers: [String: JSONValue]? = nil,
+        mcpServers: [JSONValue] = [],
         permissionMode: PermissionMode = .auto
     ) async throws -> OpenCodeSession {
-        let result = try await send("session/new", params: sessionParams(
+        let result = try await send("session/new", params: Self.sessionParams(
             sessionID: nil,
-            cwd: cwd,
+            cwd: cwd ?? configuration.cwd,
             mcpServers: mcpServers,
             permissionMode: permissionMode
         ))
         guard let session = OpenCodeSession.decode(result) else {
             throw OpenCodeClientError.unexpectedResult(method: "session/new")
         }
+        absorbModels(from: result)
         return session
     }
 
@@ -335,16 +327,17 @@ public actor OpenCodeClient {
     public func resumeSession(
         _ sessionID: String,
         cwd: String? = nil,
-        mcpServers: [String: JSONValue]? = nil,
+        mcpServers: [JSONValue] = [],
         permissionMode: PermissionMode = .auto
     ) async throws -> OpenCodeSession {
-        let result = try await send("session/load", params: sessionParams(
+        let result = try await send("session/load", params: Self.sessionParams(
             sessionID: sessionID,
-            cwd: cwd,
+            cwd: cwd ?? configuration.cwd,
             mcpServers: mcpServers,
             permissionMode: permissionMode
         ))
         if let session = OpenCodeSession.decode(result) {
+            absorbModels(from: result)
             return session
         }
         return OpenCodeSession(id: sessionID, currentModelID: currentModelID)
@@ -390,14 +383,15 @@ public actor OpenCodeClient {
     }
 
     /// Builds session parameters for new/resume session calls.
-    private func sessionParams(
+    nonisolated static func sessionParams(
         sessionID: String?,
-        cwd: String?,
-        mcpServers: [String: JSONValue]?,
+        cwd: String,
+        mcpServers: [JSONValue],
         permissionMode: PermissionMode
     ) -> JSONValue {
         var members: [String: JSONValue?] = [
-            "cwd": .string(cwd ?? configuration.cwd),
+            "cwd": .string(cwd),
+            "mcpServers": .array(mcpServers),
             "_meta": .object([
                 "yoloMode": .bool(permissionMode == .bypassPermissions),
                 "autoMode": .bool(permissionMode == .auto || permissionMode == .autoReview),
@@ -405,10 +399,18 @@ public actor OpenCodeClient {
             ]),
         ]
         if let sessionID { members["sessionId"] = .string(sessionID) }
-        if let mcpServers, !mcpServers.isEmpty {
-            members["mcpServers"] = .object(mcpServers)
-        }
         return .object(omittingNil: members)
+    }
+
+    /// Remember the models a session response advertised, so the picker has an answer without
+    /// spawning another connection.
+    private func absorbModels(from result: JSONValue) {
+        let state = result["modelState"] ?? result
+        let models = OpenCodeModel.decodeList(state)
+        if !models.isEmpty { advertised = models }
+        if let current = state["currentModelId"]?.stringValue, !current.isEmpty {
+            currentModelID = current
+        }
     }
 
     // MARK: Reading
@@ -463,7 +465,12 @@ public actor OpenCodeClient {
         } else if promptIDs.remove(id) != nil {
             // This is a response to a session/prompt we sent
             // We don't wait on these, so just emit as event
-            sink.yield(.promptResponse(id: id, result: result))
+            sink.yield(.promptResponse(OpenCodePromptResult(
+                requestID: id,
+                sessionID: result["sessionId"]?.stringValue ?? "",
+                stopReason: result["stopReason"]?.stringValue ?? "end_turn",
+                raw: result
+            )))
         } else {
             // Unexpected response - might be from a previous session
             // Log and ignore
@@ -532,7 +539,7 @@ public actor OpenCodeClient {
 /// Events emitted by the OpenCodeClient to its consumers.
 public enum OpenCodeEvent: Sendable {
     /// Response to a session/prompt request (we don't wait on these)
-    case promptResponse(id: OpenCodeRequestID, result: JSONValue)
+    case promptResponse(OpenCodePromptResult)
     /// Error response to a session/prompt request
     case promptError(id: OpenCodeRequestID, error: OpenCodeRPCError)
     /// Server-to-client permission request
@@ -571,49 +578,42 @@ public struct OpenCodeSession: Sendable, Hashable {
     }
 }
 
-// MARK: - Model representation
-
-/// Represents a model available from OpenCode.
-public struct OpenCodeModel: Sendable, Hashable {
-    public let id: String
-    public let name: String
-    public let provider: String
-    public let contextWindow: Int?
-    public let pricing: JSONValue?
-
-    public init(id: String, name: String, provider: String, contextWindow: Int? = nil, pricing: JSONValue? = nil) {
-        self.id = id
-        self.name = name
-        self.provider = provider
-        self.contextWindow = contextWindow
-        self.pricing = pricing
-    }
-
-    /// Decode a list of models from OpenCode's model listing.
-    /// OpenCode models are in format: provider/model-name
-    public static func decodeList(_ value: JSONValue) -> [OpenCodeModel] {
-        // OpenCode may return models in different formats
-        // For now, we'll handle the basic case
-        // This can be expanded based on actual API response
-        guard case .array(let array) = value else { return [] }
-        return array.compactMap { item in
-            guard case .string(let id) = item else { return nil }
-            let parts = id.split(separator: "/", maxSplits: 1)
-            guard parts.count == 2 else { return nil }
-            return OpenCodeModel(
-                id: id,
-                name: String(parts[1]),
-                provider: String(parts[0])
-            )
-        }
-    }
-}
-
 // MARK: - Bridge Registration for OpenCode
 
 extension BridgeRegistration {
     public static func opencodeArguments(_ bridge: BridgeAttachment) -> [String] {
-        var args: [String] = []
+        let args: [String] = []
         return args
+    }
+}
+
+// MARK: - Live process
+
+/// The process again, held outside the actor so it can be signalled without waiting for a turn on
+/// one. The same shape as `GrokClient`'s and `CodexClient`'s, which are file-private for the same
+/// reason: the box is emptied by bookkeeping that must not queue behind the actor.
+private final class LiveProcess: Sendable {
+    private struct State {
+        var process: (any AgentProcessing)?
+        var signalled = false
+    }
+
+    private let state = Mutex(State())
+
+    var current: (any AgentProcessing)? { state.withLock(\.process) }
+
+    func attach(_ process: any AgentProcessing) {
+        state.withLock { state in
+            state.process = process
+            state.signalled = false
+        }
+    }
+
+    func claimForSignal() -> (any AgentProcessing)? {
+        state.withLock { state -> (any AgentProcessing)? in
+            guard !state.signalled, let process = state.process else { return nil }
+            state.signalled = true
+            return process
+        }
     }
 }

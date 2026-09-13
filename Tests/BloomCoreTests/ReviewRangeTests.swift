@@ -272,13 +272,17 @@ struct ReviewRangeTests {
 
     @Test("a chip spells out both ends of a range and one number otherwise")
     func labelsARange() {
+        // Explicit timestamps, because both notes sit on line 34 of one file: without a tiebreak
+        // the order falls through to the id, and the label would depend on which UUID sorts first.
         let one = ReviewComment(
             workspaceID: WorkspaceID("w"), filePath: "a/Widget.swift",
-            anchor: ReviewCommentAnchor(line: 34, text: "x"), body: "b"
+            anchor: ReviewCommentAnchor(line: 34, text: "x"), body: "b",
+            createdAt: Date(timeIntervalSince1970: 1_000)
         )
         let range = ReviewComment(
             workspaceID: WorkspaceID("w"), filePath: "a/Widget.swift",
-            anchor: ReviewCommentAnchor(line: 34, text: "x", span: 5), body: "b"
+            anchor: ReviewCommentAnchor(line: 34, text: "x", span: 5), body: "b",
+            createdAt: Date(timeIntervalSince1970: 2_000)
         )
         let removed = ReviewComment(
             workspaceID: WorkspaceID("w"), filePath: "a/Widget.swift", side: .old,

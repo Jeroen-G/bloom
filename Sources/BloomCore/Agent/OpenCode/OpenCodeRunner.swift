@@ -446,81 +446,26 @@ public actor OpenCodeRunner: SessionRunner {
     )
 }
 
-// MARK: - Supporting Types
-
-/// Session information returned by OpenCode ACP.
-public struct OpenCodeSession: Sendable, Hashable {
-    public let id: String
-    public let currentModelID: String
-
-    public init(id: String, currentModelID: String = "") {
-        self.id = id
-        self.currentModelID = currentModelID
-    }
-}
-
-/// Permission handling for OpenCode.
-public enum OpenCodePermission {
-    /// Build a permission ask from a server request.
-    public static func ask(for request: OpenCodeServerRequest, connectionID: UUID) -> PermissionAsk {
-        let action = request.params["action"]?.stringValue ?? ""
-        let description = request.params["description"]?.stringValue ?? ""
-        let toolUseID = request.params["toolUseId"]?.stringValue ?? request.id.turnID
-        
-        return PermissionAsk(
-            requestID: request.id.turnID,
-            toolUseID: toolUseID,
-            kind: .openCodePermission,
-            subject: description,
-            raw: request.raw,
-            connectionID: connectionID
-        )
-    }
-
-    /// Result for cancelled permission requests.
-    public static var cancelledResult: JSONValue {
-        .object(["status": .string("cancelled")])
-    }
-
-    /// Result for selected permission option.
-    public static func selectedResult(optionID: String) -> JSONValue {
-        .object(["status": .string("approved"), "optionId": .string(optionID)])
-    }
-
-    /// Extract option ID for a decision from a permission request.
-    public static func optionID(for decision: PermissionDecision, in request: OpenCodeServerRequest) -> String? {
-        // Map Bloom's PermissionDecision to OpenCode's permission options
-        // This may need adjustment based on actual OpenCode ACP behavior
-        switch decision {
-        case .allow:
-            return "allow"
-        case .deny:
-            return "deny"
-        case .answer:
-            // For input requests, the answer is in the decision
-            return "provide"
-        default:
-            return nil
-        }
-    }
-}
+// MARK: - Bridge registration for OpenCode
 
 /// Bridge registration for OpenCode.
 extension BridgeRegistration {
     /// Build OpenCode-specific MCP server configuration.
-    public static func opencodeServers(_ bridge: BridgeAttachment?) -> [String: JSONValue]? {
-        guard let bridge else { return nil }
-        var servers: [String: JSONValue] = [:]
-        
-        if let config = bridge.mcpConfig {
-            servers["config"] = .string(config)
-        }
-        
-        if !bridge.environment.isEmpty {
-            servers["env"] = .object(bridge.environment.mapValues { .string($0) })
-        }
-        
-        return servers.isEmpty ? nil : servers
+    ///
+    /// ACP stdio servers take `env` as an array of `{name, value}` objects, not a map, exactly as
+    /// `grokServers` documents for the same protocol. Nil attachment means no Bloom bridge, which
+    /// is every test that did not ask for one.
+    public static func opencodeServers(_ bridge: BridgeAttachment?) -> [JSONValue] {
+        guard let bridge else { return [] }
+        let environment = bridge.environment
+            .sorted { $0.key < $1.key }
+            .map { JSONValue.object(["name": .string($0.key), "value": .string($0.value)]) }
+        return [.object([
+            "name": .string(serverName),
+            "command": .string(bridge.shimPath),
+            "args": .array([]),
+            "env": .array(environment),
+        ])]
     }
 }
 

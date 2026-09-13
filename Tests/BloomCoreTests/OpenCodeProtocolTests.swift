@@ -165,7 +165,7 @@ import Foundation
     }
 
     @Test func decodeResponseFrameWithNullResult() throws {
-        let line = "{"jsonrpc":"2.0","id":1,"result":null}"
+        let line = #"{"jsonrpc":"2.0","id":1,"result":null}"#
         guard case .response(let id, let result, _) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected response frame")
             return
@@ -242,7 +242,7 @@ import Foundation
     }
 
     @Test func decodeNotificationFrameWithoutParams() throws {
-        let line = "{"jsonrpc":"2.0","method":"initialized"}"
+        let line = #"{"jsonrpc":"2.0","method":"initialized"}"#
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
             return
@@ -253,7 +253,7 @@ import Foundation
 
     @Test func decodeNotificationFrameWithoutJSONRPC() throws {
         // ACP spec says jsonrpc member is optional, test without it
-        let line = "{"method":"session/update","params":{}}"
+        let line = #"{"method":"session/update","params":{}}"#
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
             return
@@ -264,7 +264,7 @@ import Foundation
     // MARK: - Frame Classification Tests
 
     @Test func classifyRequestFrame() throws {
-        let line = "{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"
+        let line = #"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{}}"#
         guard case .request(let request) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected request frame")
             return
@@ -274,7 +274,7 @@ import Foundation
     }
 
     @Test func classifyNotificationFrame() throws {
-        let line = "{"jsonrpc":"2.0","method":"session/update","params":{}}"
+        let line = #"{"jsonrpc":"2.0","method":"session/update","params":{}}"#
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
             return
@@ -283,7 +283,7 @@ import Foundation
     }
 
     @Test func classifyResponseFrame() throws {
-        let line = "{"jsonrpc":"2.0","id":1,"result":{}}"
+        let line = #"{"jsonrpc":"2.0","id":1,"result":{}}"#
         guard case .response = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected response frame")
             return
@@ -291,7 +291,7 @@ import Foundation
     }
 
     @Test func classifyFailureFrame() throws {
-        let line = "{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"error"}}"
+        let line = #"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"error"}}"#
         guard case .failure = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected failure frame")
             return
@@ -407,7 +407,7 @@ import Foundation
     @Test func modelInit() throws {
         let model = OpenCodeModel(
             id: "anthropic/claude-3-sonnet",
-            name: "claude-3-sonnet",
+            displayName: "claude-3-sonnet",
             provider: "anthropic"
         )
         #expect(model.id == "anthropic/claude-3-sonnet")
@@ -471,7 +471,7 @@ import Foundation
     }
 
     @Test func parseSessionNewResponse() throws {
-        let line = "{"id":2,"result":{"sessionId":"sess_abc123"}}"
+        let line = #"{"id":2,"result":{"sessionId":"sess_abc123"}}"#
         guard case .response(let id, let result, _) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected response frame")
             return
@@ -544,7 +544,7 @@ import Foundation
     }
 
     @Test func parseSessionEnded() throws {
-        let line = "{"method":"session/ended","params":{"sessionId":"sess_abc123"}}"
+        let line = #"{"method":"session/ended","params":{"sessionId":"sess_abc123"}}"#
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
             return

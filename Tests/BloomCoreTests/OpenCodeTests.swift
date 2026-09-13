@@ -1,8 +1,9 @@
 import Testing
-import BloomCore
+import Foundation
+@testable import BloomCore
 
 /// Tests for OpenCode ACP protocol implementation.
-struct OpenCodeProtocolTests {
+struct OpenCodeWireTests {
     @Test
     func requestIDNumberEncoding() {
         let id = OpenCodeRequestID.number(42)
@@ -165,7 +166,7 @@ struct OpenCodeClientTests {
         let params = OpenCodeClient.sessionParams(
             sessionID: nil,
             cwd: "/test/path",
-            mcpServers: nil,
+            mcpServers: [],
             permissionMode: .auto
         )
         
@@ -177,7 +178,7 @@ struct OpenCodeClientTests {
         let params = OpenCodeClient.sessionParams(
             sessionID: "test-session",
             cwd: "/test/path",
-            mcpServers: nil,
+            mcpServers: [],
             permissionMode: .auto
         )
         
@@ -189,7 +190,7 @@ struct OpenCodeClientTests {
         let params = OpenCodeClient.sessionParams(
             sessionID: nil,
             cwd: "/test/path",
-            mcpServers: nil,
+            mcpServers: [],
             permissionMode: .bypassPermissions
         )
         
@@ -203,12 +204,13 @@ struct OpenCodeClientTests {
         let params = OpenCodeClient.sessionParams(
             sessionID: nil,
             cwd: "/test/path",
-            mcpServers: ["mcp": .string("test")],
+            mcpServers: [.object(["name": .string("mcp"), "command": .string("test")])],
             permissionMode: .auto
         )
         
-        let mcp = params["mcpServers"]?.objectValue ?? [:]
-        #expect(mcp["mcp"]?.stringValue == "test")
+        let mcp = params["mcpServers"]?.arrayValue ?? []
+        #expect(mcp.count == 1)
+        #expect(mcp[0]["name"]?.stringValue == "mcp")
     }
 }
 
@@ -220,7 +222,7 @@ struct OpenCodeSessionTests {
     func sessionDecode() {
         let json: JSONValue = .object([
             "sessionId": .string("test-session"),
-            "currentModelID": .string("openai/gpt-4")
+            "currentModelId": .string("openai/gpt-4")
         ])
         
         let session = OpenCodeSession.decode(json)
@@ -232,7 +234,7 @@ struct OpenCodeSessionTests {
     @Test
     func sessionDecodeMissingID() {
         let json: JSONValue = .object([
-            "currentModelID": .string("openai/gpt-4")
+            "currentModelId": .string("openai/gpt-4")
         ])
         
         let session = OpenCodeSession.decode(json)
@@ -244,7 +246,7 @@ struct OpenCodeSessionTests {
     func sessionDecodeFromIDField() {
         let json: JSONValue = .object([
             "id": .string("test-session"),
-            "currentModelID": .string("openai/gpt-4")
+            "currentModelId": .string("openai/gpt-4")
         ])
         
         let session = OpenCodeSession.decode(json)
@@ -372,7 +374,7 @@ struct OpenCodePermissionTests {
         
         #expect(ask.requestID == "1")
         #expect(ask.toolUseID == "tool-1")
-        #expect(ask.subject.contains("Read /test/file.txt"))
+        #expect(ask.summary.contains("Read /test/file.txt"))
     }
 
     @Test
@@ -429,20 +431,5 @@ struct OpenCodePermissionTests {
         let response = OpenCodePermission.response(for: decision, request: request)
         
         #expect(response["status"]?.stringValue == "denied")
-    }
-
-    @Test
-    func responseForCancelDecision() {
-        let request = OpenCodeServerRequest(
-            id: .number(1),
-            method: "session/request_permission",
-            params: .object(["action": .string("read_file")]),
-            raw: Data()
-        )
-        
-        let decision: PermissionDecision = .cancel
-        let response = OpenCodePermission.response(for: decision, request: request)
-        
-        #expect(response["status"]?.stringValue == "cancelled")
     }
 }

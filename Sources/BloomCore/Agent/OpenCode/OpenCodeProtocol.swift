@@ -258,22 +258,3 @@ public enum OpenCodeOutgoing {
         return "{\"jsonrpc\":\"\(version)\",\"id\":\(id.jsonLiteral),\"error\":\(error.compactJSON)}"
     }
 }
-
-// MARK: - JSON helpers
-
-extension JSONValue {
-    public var compactJSON: String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.withoutEscapingSlashes]
-        guard let data = try? encoder.encode(self) else { return "null" }
-        return String(decoding: data, as: UTF8.self)
-    }
-
-    /// An object built from optional members, where nil means "leave the key out".
-    ///
-    /// The distinction matters on this protocol: a missing key vs null value can have
-    /// different semantics. Every params builder goes through here.
-    public static func object(omittingNil entries: [String: JSONValue?]) -> JSONValue {
-        .object(entries.compactMapValues { $0 })
-    }
-}

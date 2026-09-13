@@ -83,25 +83,18 @@ public struct OpenCodeTranslation: Sendable {
     public mutating func translate(_ event: OpenCodeEvent) -> [AgentEvent] {
         switch event {
         case .sessionUpdate(let update):
-            if !update.sessionID.isEmpty { sessionID = update.sessionID }
+            let updateSessionID = update.params["sessionId"]?.stringValue ?? ""
+            if !updateSessionID.isEmpty { sessionID = updateSessionID }
             return updateEvents(update)
 
         case .promptResponse(let result):
             if !result.sessionID.isEmpty { sessionID = result.sessionID }
             var events = flushOpenBlocks()
-            // For prompt response, we need to create a result event
-            // This is a simplified approach - actual implementation may need adjustment
-            let promptResult = OpenCodePromptResult(
-                requestID: result.id,
-                sessionID: result.sessionID,
-                stopReason: result.result["stopReason"]?.stringValue ?? "end_turn",
-                raw: result.result
-            )
-            events.append(.result(self.result(for: promptResult)))
+            events.append(.result(self.result(for: result)))
             tools.removeAll()
             return events
 
-        case .promptError(let error):
+        case .promptError(_, let error):
             return finishInterruptedTurn()
                 + [.error(AgentError(message: error.message, raw: Self.errorLine(message: error.message)))]
 
@@ -529,6 +522,8 @@ extension OpenCodeEvent {
     /// Extract session ID from the event if available.
     var sessionID: String {
         switch self {
+        case .promptResponse(let result):
+            return result.sessionID
         case .sessionUpdate(let notification):
             return notification.params["sessionId"]?.stringValue ?? ""
         case .sessionStatus(let notification):
