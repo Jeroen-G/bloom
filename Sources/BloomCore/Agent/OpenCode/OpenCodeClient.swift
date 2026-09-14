@@ -69,21 +69,17 @@ public actor OpenCodeClient {
             environment["OPENCODE_CONFIG_DIR"] = configDir
         }
 
+        // OpenCode v2.0.3's `acp` subcommand accepts no arguments beyond the global flags.
+        // Passing `--cwd`, `--model` or `--variant` kills the process on startup. The project
+        // root is the process working directory (set via AgentLaunch.cwd →
+        // StreamingProcess.currentDirectoryURL), which both v1 and v2 honour. Model and effort
+        // selection are advertised by `configOptions` but 2.0.3 cannot apply an override via ACP;
+        // when upstream ships `session/options/set`, the runner can wire the picker choice through.
         var arguments: [String] = ["acp"]
-        arguments.append("--cwd")
-        arguments.append(configuration.cwd)
 
         // Register MCP bridge if available
         if let bridge = configuration.bridge {
             arguments += BridgeRegistration.opencodeArguments(bridge)
-        }
-
-        // Model and effort selection
-        if !configuration.model.isEmpty {
-            arguments += ["--model", configuration.model]
-        }
-        if !configuration.effort.isEmpty {
-            arguments += ["--variant", configuration.effort]
         }
 
         return AgentLaunch(
@@ -183,7 +179,8 @@ public actor OpenCodeClient {
         let result = try await send(
             "initialize",
             params: .object([
-                "protocolVersion": .string("1"),
+                // A number, not a string: OpenCode v2 rejects `"1"` with "expected number".
+                "protocolVersion": .integer(1),
                 "clientInfo": .object([
                     "name": .string(configuration.clientName),
                     "version": .string(configuration.clientVersion),
@@ -405,11 +402,20 @@ public actor OpenCodeClient {
     /// Remember the models a session response advertised, so the picker has an answer without
     /// spawning another connection.
     private func absorbModels(from result: JSONValue) {
-        let state = result["modelState"] ?? result
-        let models = OpenCodeModel.decodeList(state)
-        if !models.isEmpty { advertised = models }
-        if let current = state["currentModelId"]?.stringValue, !current.isEmpty {
-            currentModelID = current
+        // OpenCode v2 names no models in `initialize`; the `session/new` response carries them
+        // in `configOptions` instead. Prefer that shape, fall back to the v1 `modelState` one.
+        if let models = OpenCodeModel.decodeConfigOptions(result) {
+            if !models.isEmpty { advertised = models }
+            if let current = models.first(where: \.isDefault)?.id, !current.isEmpty {
+                currentModelID = current
+            }
+        } else {
+            let state = result["modelState"] ?? result
+            let models = OpenCodeModel.decodeList(state)
+            if !models.isEmpty { advertised = models }
+            if let current = state["currentModelId"]?.stringValue, !current.isEmpty {
+                currentModelID = current
+            }
         }
     }
 
@@ -501,7 +507,13 @@ public actor OpenCodeClient {
     private func handleNotification(_ notification: OpenCodeServerNotification) async {
         switch notification.method {
         case "session/update":
-            sink.yield(.sessionUpdate(notification))
+            // OpenCode v2 speaks the same ACP v1 update vocabulary as Grok: the `update` object
+            // discriminates on `sessionUpdate` with `agent_message_chunk`, `agent_thought_chunk`,
+            // `tool_call`, `tool_call_update` and `usage_update` kinds. The translation builds on
+            // the typed kind, so decode here rather than handing a raw notification down.
+            if let update = OpenCodeSessionUpdate.decode(params: notification.params) {
+                sink.yield(.sessionUpdate(update))
+            }
         case "session/status":
             sink.yield(.sessionStatus(notification))
         case "session/ended":
@@ -547,13 +559,61 @@ public enum OpenCodeEvent: Sendable {
     /// Unknown server-to-client request
     case unknownServerRequest(OpenCodeServerRequest)
     /// Session update notification (streaming content)
-    case sessionUpdate(OpenCodeServerNotification)
+    case sessionUpdate(OpenCodeSessionUpdate)
     /// Session status notification
     case sessionStatus(OpenCodeServerNotification)
     /// Session ended notification
     case sessionEnded(OpenCodeServerNotification)
     /// Unknown notification
     case unknownNotification(OpenCodeServerNotification)
+}
+
+/// A decoded `session/update` notification. The `sessionUpdate` member discriminates the update
+/// kind, exactly as Grok's ACP wire does; Bloom reads the typed kind, never the raw params.
+public struct OpenCodeSessionUpdate: Sendable, Hashable {
+    public enum Kind: Sendable, Hashable {
+        case text(String)
+        case thought(String)
+        case toolCall(OpenCodeToolCall)
+        case toolCallUpdate(OpenCodeToolCall)
+        case usage(used: Int, size: Int)
+        case other(String)
+    }
+
+    public let sessionID: String
+    public let kind: Kind
+    public let raw: JSONValue
+
+    public static func decode(params: JSONValue) -> OpenCodeSessionUpdate? {
+        let update = params["update"] ?? params
+        guard let type = update["sessionUpdate"]?.stringValue else { return nil }
+        let sessionID = params["sessionId"]?.stringValue ?? ""
+        let kind: Kind
+        switch type {
+        case "agent_message_chunk":
+            kind = .text(Self.contentText(update["content"]))
+        case "agent_thought_chunk":
+            kind = .thought(Self.contentText(update["content"]))
+        case "tool_call":
+            kind = .toolCall(OpenCodeToolCall.decode(update, isUpdate: false))
+        case "tool_call_update":
+            kind = .toolCallUpdate(OpenCodeToolCall.decode(update, isUpdate: true))
+        case "usage_update":
+            kind = .usage(
+                used: update["used"]?.intValue ?? 0,
+                size: update["size"]?.intValue ?? 0
+            )
+        default:
+            kind = .other(type)
+        }
+        return OpenCodeSessionUpdate(sessionID: sessionID, kind: kind, raw: update)
+    }
+
+    /// ACP content is `{ "type": "text", "text": "..." }` on chunks. A bare string is accepted
+    /// because a future framing might flatten it and a missing sentence is worse than a loose one.
+    static func contentText(_ json: JSONValue?) -> String {
+        json?["text"]?.stringValue ?? json?.stringValue ?? ""
+    }
 }
 
 // MARK: - Session representation

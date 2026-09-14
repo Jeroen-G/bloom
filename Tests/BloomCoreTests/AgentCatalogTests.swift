@@ -236,6 +236,65 @@ struct AgentCatalogTests {
         #expect(details.map(\.value) == ["1.0.24", "xAI API key", "API key (XAI_API_KEY set)", "unknown"])
     }
 
+    // MARK: OpenCode
+
+    @Test("decodes the verified OpenCode provider-map auth file into ordered providers")
+    func decodesOpenCodeAuth() {
+        let account = AgentCatalog.decodeOpenCodeAuth(json([
+            "google": ["type": "oauth", "expires": 1_800_000_000],
+            "ollama": ["type": "api"],
+            "opencode": ["type": "api", "key": "sk-secret-must-never-appear"],
+            "shady": ["type": NSNull()],
+        ]))
+
+        #expect(account?.providers.map(\.id) == ["google", "ollama", "opencode"])
+        #expect(account?.providers.map(\.authType) == ["oauth", "api", "api"])
+        #expect(account?.expiresAt?.timeIntervalSince1970 == 1_800_000_000)
+        #expect(account?.providers.contains { $0.id == "shady" } == false)
+    }
+
+    @Test("an empty or untyped OpenCode auth file decodes to no account")
+    func opencodeAuthWithoutEvidence() {
+        #expect(AgentCatalog.decodeOpenCodeAuth(Data("{}".utf8)) == nil)
+        #expect(AgentCatalog.decodeOpenCodeAuth(Data("{ broken".utf8)) == nil)
+        #expect(AgentCatalog.decodeOpenCodeAuth(Data("not json".utf8)) == nil)
+    }
+
+    @Test("OpenCode details list providers and login methods and never the credentials")
+    func readsOpenCodeAccount() {
+        let details = AgentCatalog.opencodeDetails(
+            authJSON: json([
+                "google": ["type": "oauth", "expires": 1_800_000_000],
+                "ollama": ["type": "api"],
+                "opencode": ["type": "api", "key": "sk-secret-must-never-appear"],
+            ]),
+            version: "2.0.3",
+            apiKeyIsSet: false
+        )
+
+        #expect(details.map(\.label) == ["Version", "Provider", "Login method", "Accounts"])
+        #expect(details.map(\.value) == ["2.0.3", "OpenCode", "OpenCode login + API key", "google, ollama, opencode"])
+        #expect(!details.contains { $0.value.contains("secret") })
+    }
+
+    @Test("an OPENCODE_API_KEY with no auth file still shows as connected")
+    func opencodeAPIKeyWithoutFile() {
+        let details = AgentCatalog.opencodeDetails(authJSON: nil, version: "2.0.3", apiKeyIsSet: true)
+        #expect(details.map(\.label) == ["Version", "Provider", "Login method"])
+        #expect(details.map(\.value) == ["2.0.3", "OpenCode API key", "API key (OPENCODE_API_KEY set)"])
+    }
+
+    @Test("OpenCode shows a session-expired row when the oauth credential is expired")
+    func opencodeExpiredSession() {
+        let details = AgentCatalog.opencodeDetails(
+            authJSON: json(["google": ["type": "oauth", "expires": 1]]),
+            version: "2.0.3",
+            apiKeyIsSet: false
+        )
+        #expect(details.map(\.label).contains("Session"))
+        #expect(details.map(\.value).contains("Expired, sign in again with `opencode auth login`"))
+    }
+
     // MARK: Versions
 
     @Test("parses both observed version formats and falls back on anything else")

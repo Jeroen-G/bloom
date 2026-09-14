@@ -12,6 +12,8 @@ public struct OpenCodeModel: Sendable, Hashable, Identifiable {
     public let isDefault: Bool
     public let contextTokens: Int
     public let pricing: JSONValue?
+    public let supportedEfforts: [AgentModelEffort]
+    public let defaultEffort: String
 
     public init(
         id: String,
@@ -20,7 +22,9 @@ public struct OpenCodeModel: Sendable, Hashable, Identifiable {
         description: String = "",
         isDefault: Bool = false,
         contextTokens: Int = 0,
-        pricing: JSONValue? = nil
+        pricing: JSONValue? = nil,
+        supportedEfforts: [AgentModelEffort] = [],
+        defaultEffort: String = ""
     ) {
         self.id = id
         self.displayName = displayName
@@ -29,6 +33,8 @@ public struct OpenCodeModel: Sendable, Hashable, Identifiable {
         self.isDefault = isDefault
         self.contextTokens = contextTokens
         self.pricing = pricing
+        self.supportedEfforts = supportedEfforts
+        self.defaultEffort = defaultEffort
     }
 
     public var agentModel: AgentModel {
@@ -36,8 +42,8 @@ public struct OpenCodeModel: Sendable, Hashable, Identifiable {
             id: id,
             displayName: displayName,
             isDefault: isDefault,
-            supportedEfforts: [],
-            defaultEffort: ""
+            supportedEfforts: supportedEfforts,
+            defaultEffort: defaultEffort
         )
     }
 
@@ -100,14 +106,60 @@ public struct OpenCodeModel: Sendable, Hashable, Identifiable {
             ?? []
         return items.compactMap { decode($0, currentModelID: current) }
     }
+
+    /// The models OpenCode v2 advertises in the `session/new` response, read from
+    /// `configOptions`.
+    ///
+    /// v2 stopped naming models in `initialize`: the list now travels in the session response as
+    /// a `select` whose `id` is `model`, with `options` of `{value, name}` and the chosen model in
+    /// `currentValue`. The same response carries the session's effort levels in an `effort`
+    /// select, shared by every model until a session overrides them.
+    ///
+    /// Returns nil when the value has no `configOptions`, so a caller can fall back to the v1
+    /// `modelState` shape. Returns an empty list when the shape is present but names no models.
+    public static func decodeConfigOptions(_ json: JSONValue) -> [OpenCodeModel]? {
+        guard let options = json["configOptions"]?.arrayValue else { return nil }
+        guard let modelSelect = options.first(where: { $0["id"]?.stringValue == "model" }) else {
+            return []
+        }
+        let current = modelSelect["currentValue"]?.stringValue ?? ""
+
+        // The effort select travels in the same response, once per session. Its options are the
+        // levels every model takes until a session pins its own (see `OpenCodeModel.agentModel`).
+        let effortSelect = options.first { $0["id"]?.stringValue == "effort" }
+        let efforts = (effortSelect?["options"]?.arrayValue ?? []).compactMap { item -> AgentModelEffort? in
+            guard let id = item["value"]?.stringValue, !id.isEmpty else { return nil }
+            return AgentModelEffort(id: id, label: item["name"]?.stringValue ?? id)
+        }
+        let defaultEffort = effortSelect?["currentValue"]?.stringValue ?? ""
+
+        return (modelSelect["options"]?.arrayValue ?? []).compactMap { item in
+            guard let id = item["value"]?.stringValue, !id.isEmpty else { return nil }
+            let provider = id.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
+            // v2 labels carry the provider prefix ("opencode/GPT-5.5"); the model menu has
+            // always shown the name without it.
+            let name = item["name"]?.stringValue ?? id
+            let displayName = (!provider.isEmpty && name.hasPrefix(provider + "/"))
+                ? String(name.dropFirst(provider.count + 1))
+                : name
+            return OpenCodeModel(
+                id: id,
+                displayName: displayName,
+                provider: provider,
+                isDefault: id == current,
+                supportedEfforts: efforts,
+                defaultEffort: defaultEffort
+            )
+        }
+    }
 }
 
 /// The models OpenCode offers, fetched once and kept.
 ///
-/// Fetched from ACP `initialize`, which already carries `modelState` without opening a session
-/// and without spending a turn. A short-lived `opencode acp` is spawned per fetch, the same
-/// shape as `GrokModelCatalog`, so listing models is not a process the user did not ask for
-/// hanging around between picker openings.
+/// Fetched from ACP `session/new`, whose `configOptions` carries the model list since v2, without
+/// spending a turn. A short-lived `opencode acp` is spawned per fetch, the same shape as
+/// `GrokModelCatalog`, so listing models is not a process the user did not ask for hanging around
+/// between picker openings.
 public actor OpenCodeModelCatalog {
     public static let freshness = AgentModelCache<OpenCodeModel>.freshness
 
@@ -142,6 +194,10 @@ public actor OpenCodeModelCatalog {
             ))
             defer { Task { await client.stop() } }
             try await client.start()
+            // v2 stopped naming models during `initialize`; the model list now arrives in the
+            // `session/new` response's `configOptions`. One scratch session is opened and torn
+            // down with the short-lived process, spending no turn.
+            _ = try await client.newSession(cwd: cwd)
             return await client.advertisedModels()
         })
     }

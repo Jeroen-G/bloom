@@ -4,7 +4,7 @@ import Foundation
 ///
 /// ## Why this protocol
 ///
-/// OpenCode v2 supports the Agent Client Protocol (ACP) via `opencode acp --cwd /path`,
+/// OpenCode v2 supports the Agent Client Protocol (ACP) via `opencode acp`,
 /// which is JSON-RPC 2.0 over stdio with newline-delimited JSON. This is the same protocol
 /// class as Grok's `grok agent --no-leader stdio` and Codex's `codex app-server --listen stdio://`.
 ///

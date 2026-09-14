@@ -229,9 +229,10 @@ import Foundation
     }
 
     @Test func decodeNotificationFrame() throws {
-        // Session update notification
+        // Session update notification, in the verified OpenCode v2 shape: the `update` object
+        // discriminates on `sessionUpdate`, and content is `{ type: "text", text: ... }`.
         let line = """
-        {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-123","update":{"type":"agent_message_chunk","chunk":{"type":"text","text":"hello"}}}}
+        {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}}}
         """
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
@@ -239,6 +240,12 @@ import Foundation
         }
         #expect(notification.method == "session/update")
         #expect(notification.params["sessionId"]?.stringValue == "sess-123")
+        // The typed decode reads the same shape the translation consumes.
+        let update = OpenCodeSessionUpdate.decode(params: notification.params)
+        guard case .text("hello") = update?.kind else {
+            Issue.record("Expected a text chunk update")
+            return
+        }
     }
 
     @Test func decodeNotificationFrameWithoutParams() throws {
@@ -304,12 +311,13 @@ import Foundation
         let line = OpenCodeOutgoing.request(
             id: .number(1),
             method: "initialize",
-            params: .object(["protocolVersion": .string("1")])
+            params: .object(["protocolVersion": .integer(1)])
         )
         #expect(line.contains("\"jsonrpc\":\"2.0\""))
         #expect(line.contains("\"id\":1"))
         #expect(line.contains("\"method\":\"initialize\""))
-        #expect(line.contains("\"protocolVersion\":\"1\""))
+        // A number, not a string: OpenCode v2 rejects `"1"` with "expected number".
+        #expect(line.contains("\"protocolVersion\":1"))
     }
 
     @Test func buildRequestFrameWithStringID() throws {
@@ -447,6 +455,86 @@ import Foundation
         #expect(models[0].id == "valid/model")
         #expect(models[1].id == "also/valid")
     }
+
+    @Test func decodeConfigOptionsReturnsNilWithoutConfigOptions() throws {
+        let json: JSONValue = .object(["sessionId": .string("sess-1")])
+        #expect(OpenCodeModel.decodeConfigOptions(json) == nil)
+    }
+
+    @Test func decodeConfigOptionsReadsModelAndEffortSelects() throws {
+        // Shape copied from a real `opencode acp` v2.0.3 `session/new` response.
+        let json: JSONValue = .object([
+            "sessionId": .string("sess-1"),
+            "configOptions": .array([
+                .object([
+                    "id": .string("model"),
+                    "name": .string("Model"),
+                    "category": .string("model"),
+                    "type": .string("select"),
+                    "currentValue": .string("opencode/gpt-5.6-sol"),
+                    "options": .array([
+                        .object([
+                            "value": .string("google/gemini-3.5-flash"),
+                            "name": .string("google/Gemini 3.5 Flash"),
+                        ]),
+                        .object([
+                            "value": .string("opencode/gpt-5.6-sol"),
+                            "name": .string("opencode/GPT-5.6 Sol (50% Off)"),
+                        ]),
+                        .object([
+                            "value": .string("llama.cpp/unsloth/Qwen3.6-27B-MTP-GGUF:Q4_1"),
+                            "name": .string("llama.cpp/Qwen3.6 (local)"),
+                        ]),
+                    ]),
+                ]),
+                .object([
+                    "id": .string("effort"),
+                    "name": .string("Effort"),
+                    "category": .string("thought_level"),
+                    "type": .string("select"),
+                    "currentValue": .string("default"),
+                    "options": .array([
+                        .object(["value": .string("low"), "name": .string("Low")]),
+                        .object(["value": .string("high"), "name": .string("High")]),
+                        .object(["value": .string("max"), "name": .string("Max")]),
+                        .object(["value": .string("default"), "name": .string("Default")]),
+                    ]),
+                ]),
+            ]),
+        ])
+
+        let models = try #require(OpenCodeModel.decodeConfigOptions(json))
+        #expect(models.count == 3)
+
+        // The current model is marked default, its label loses the provider prefix.
+        let current = try #require(models.first { $0.id == "opencode/gpt-5.6-sol" })
+        #expect(current.isDefault)
+        #expect(current.displayName == "GPT-5.6 Sol (50% Off)")
+        #expect(current.provider == "opencode")
+
+        // A label that does not repeat the provider prefix survives untouched.
+        let local = try #require(models.first { $0.id == "llama.cpp/unsloth/Qwen3.6-27B-MTP-GGUF:Q4_1" })
+        #expect(local.displayName == "Qwen3.6 (local)")
+
+        // The effort select is shared by every model.
+        #expect(models.allSatisfy { $0.supportedEfforts.map(\.id) == ["low", "high", "max", "default"] })
+        #expect(models.allSatisfy { $0.defaultEffort == "default" })
+    }
+
+    @Test func decodeConfigOptionsEmptyWhenShapeNamesNoModels() throws {
+        let json: JSONValue = .object([
+            "sessionId": .string("sess-1"),
+            "configOptions": .array([
+                .object([
+                    "id": .string("mode"),
+                    "name": .string("Session Mode"),
+                    "type": .string("select"),
+                    "options": .array([]),
+                ]),
+            ]),
+        ])
+        #expect(OpenCodeModel.decodeConfigOptions(json) == [])
+    }
 }
 
 // MARK: - ACP Message Examples Tests
@@ -482,7 +570,7 @@ import Foundation
 
     @Test func parseSessionUpdateWithMessageChunk() throws {
         let line = """
-        {"method":"session/update","params":{"sessionId":"sess_abc123","update":{"type":"agent_message_chunk","chunk":{"type":"text","text":"Hello"}}}}
+        {"method":"session/update","params":{"sessionId":"sess_abc123","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello"}}}}
         """
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
@@ -490,19 +578,19 @@ import Foundation
         }
         #expect(notification.method == "session/update")
         #expect(notification.params["sessionId"]?.stringValue == "sess_abc123")
-        #expect(notification.params["update"]?["type"]?.stringValue == "agent_message_chunk")
+        #expect(notification.params["update"]?["sessionUpdate"]?.stringValue == "agent_message_chunk")
     }
 
     @Test func parseSessionUpdateWithThoughtChunk() throws {
         let line = """
-        {"method":"session/update","params":{"sessionId":"sess_abc123","update":{"type":"agent_thought_chunk","chunk":{"type":"text","text":"Thinking..."}}}}
+        {"method":"session/update","params":{"sessionId":"sess_abc123","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Thinking..."}}}}
         """
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
             return
         }
         #expect(notification.method == "session/update")
-        #expect(notification.params["update"]?["type"]?.stringValue == "agent_thought_chunk")
+        #expect(notification.params["update"]?["sessionUpdate"]?.stringValue == "agent_thought_chunk")
     }
 
     @Test func parsePermissionRequest() throws {
@@ -521,26 +609,26 @@ import Foundation
 
     @Test func parseToolCallUpdate() throws {
         let line = """
-        {"method":"session/update","params":{"sessionId":"sess_abc123","update":{"type":"tool_call","toolCall":{"id":"call_1","name":"bash","arguments":{"command":"ls -la"}}}}}
+        {"method":"session/update","params":{"sessionId":"sess_abc123","update":{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"bash","status":"pending","rawInput":{"command":"ls -la"}}}}
         """
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
             return
         }
         #expect(notification.method == "session/update")
-        #expect(notification.params["update"]?["type"]?.stringValue == "tool_call")
+        #expect(notification.params["update"]?["sessionUpdate"]?.stringValue == "tool_call")
     }
 
     @Test func parseUsageUpdate() throws {
         let line = """
-        {"method":"session/update","params":{"sessionId":"sess_abc123","update":{"type":"usage_update","usage":{"inputTokens":100,"outputTokens":50}}}}
+        {"method":"session/update","params":{"sessionId":"sess_abc123","update":{"sessionUpdate":"usage_update","used":100,"size":200}}}
         """
         guard case .notification(let notification) = try #require(OpenCodeFrame.decode(line: line)) else {
             Issue.record("Expected notification frame")
             return
         }
         #expect(notification.method == "session/update")
-        #expect(notification.params["update"]?["type"]?.stringValue == "usage_update")
+        #expect(notification.params["update"]?["sessionUpdate"]?.stringValue == "usage_update")
     }
 
     @Test func parseSessionEnded() throws {

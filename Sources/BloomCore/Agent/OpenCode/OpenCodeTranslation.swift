@@ -83,12 +83,12 @@ public struct OpenCodeTranslation: Sendable {
     public mutating func translate(_ event: OpenCodeEvent) -> [AgentEvent] {
         switch event {
         case .sessionUpdate(let update):
-            let updateSessionID = update.params["sessionId"]?.stringValue ?? ""
-            if !updateSessionID.isEmpty { sessionID = updateSessionID }
+            if !update.sessionID.isEmpty { sessionID = update.sessionID }
             return updateEvents(update)
 
         case .promptResponse(let result):
             if !result.sessionID.isEmpty { sessionID = result.sessionID }
+            absorbUsage(from: result)
             var events = flushOpenBlocks()
             events.append(.result(self.result(for: result)))
             tools.removeAll()
@@ -126,80 +126,83 @@ public struct OpenCodeTranslation: Sendable {
         return events
     }
 
-    private mutating func updateEvents(_ update: OpenCodeServerNotification) -> [AgentEvent] {
-        let params = update.params
-        
-        // Check for text content
-        if let content = params["content"] {
-            if let textChunk = content.stringValue, !textChunk.isEmpty {
-                var events = flushThought()
-                if text.isEmpty { textMessageID = UUID().uuidString }
-                text += textChunk
-                events.append(.streamDelta(.text(textChunk)))
-                return events
-            }
-        }
-        
-        // Check for thinking content
-        if let thinking = params["thinking"] {
-            if let thoughtChunk = thinking.stringValue, !thoughtChunk.isEmpty {
-                if thought.isEmpty { thoughtMessageID = UUID().uuidString }
-                thought += thoughtChunk
-                return [.streamDelta(.thinking(thoughtChunk))]
-            }
-        }
-        
-        // Check for tool calls
-        if let toolCalls = params["toolCalls"]?.arrayValue {
-            var events: [AgentEvent] = []
-            for toolCallValue in toolCalls {
-                if let toolCall = OpenCodeToolCall.decode(toolCallValue) {
-                    tools[toolCall.id] = merged(toolCall, onto: tools[toolCall.id])
-                    let stored = tools[toolCall.id] ?? toolCall
-                    let input = Self.input(for: stored)
-                    let name = Self.toolName(for: stored)
-                    let block = JSONValue.object([
-                        "type": .string("tool_use"),
-                        "id": .string(stored.id),
-                        "name": .string(name),
-                        "input": input,
-                    ])
-                    events.append(.toolUse(AgentToolUse(
-                        id: stored.id,
-                        name: name,
-                        input: input,
-                        raw: Self.assistantLine(
-                            blocks: [block],
-                            messageID: stored.id,
-                            model: context.model,
-                            usage: usage,
-                            sessionID: sessionID
-                        ),
-                        messageID: stored.id,
-                        sessionID: sessionID
-                    )))
-                    if stored.isFinished {
-                        events.append(contentsOf: toolResult(for: stored))
-                    }
-                }
+    private mutating func updateEvents(_ update: OpenCodeSessionUpdate) -> [AgentEvent] {
+        switch update.kind {
+        case .text(let chunk):
+            guard !chunk.isEmpty else { return [] }
+            var events = flushThought()
+            if text.isEmpty { textMessageID = UUID().uuidString }
+            text += chunk
+            events.append(.streamDelta(.text(chunk)))
+            return events
+
+        case .thought(let chunk):
+            guard !chunk.isEmpty else { return [] }
+            if thought.isEmpty { thoughtMessageID = UUID().uuidString }
+            thought += chunk
+            return [.streamDelta(.thinking(chunk))]
+
+        case .toolCall(let call):
+            var events = flushOpenBlocks()
+            tools[call.id] = merged(call, onto: tools[call.id])
+            let stored = tools[call.id] ?? call
+            let input = Self.input(for: stored)
+            let name = Self.toolName(for: stored)
+            let block = JSONValue.object([
+                "type": .string("tool_use"),
+                "id": .string(stored.id),
+                "name": .string(name),
+                "input": input,
+            ])
+            events.append(.toolUse(AgentToolUse(
+                id: stored.id,
+                name: name,
+                input: input,
+                raw: Self.assistantLine(
+                    blocks: [block],
+                    messageID: stored.id,
+                    model: context.model,
+                    usage: usage,
+                    sessionID: sessionID
+                ),
+                messageID: stored.id,
+                sessionID: sessionID
+            )))
+            if stored.isFinished {
+                events.append(contentsOf: toolResult(for: stored))
             }
             return events
+
+        case .toolCallUpdate(let call):
+            let stored = merged(call, onto: tools[call.id])
+            tools[call.id] = stored
+            guard stored.isFinished else { return [] }
+            return toolResult(for: stored)
+
+        case .usage(let used, let size):
+            // OpenCode's `usage_update` reports the working-set figures (`used` of `size`) while
+            // the turn runs; the definitive per-turn token split arrives on `promptResponse` and
+            // overwrites these in `absorbUsage`. The context window is the one number Bloom needs
+            // live, for the context gauge.
+            usage.inputTokens = used
+            usage.contextTokens = size
+            return []
+
+        case .other:
+            return []
         }
-        
-        // Check for usage updates
-        if let usageUpdate = params["usage"] {
-            if let inputTokens = usageUpdate["inputTokens"]?.intValue {
-                usage.inputTokens = inputTokens
-            }
-            if let outputTokens = usageUpdate["outputTokens"]?.intValue {
-                usage.outputTokens = outputTokens
-            }
-            if let contextTokens = usageUpdate["contextTokens"]?.intValue {
-                usage.contextTokens = contextTokens
-            }
-        }
-        
-        return []
+    }
+
+    /// The `session/prompt` response carries the real per-turn token split
+    /// (`inputTokens`/`outputTokens`/`cachedReadTokens`/`thoughtTokens`), which the streaming
+    /// `usage_update` notifications never had. Take those numbers so the stored result and the
+    /// session's running totals agree with what the model actually consumed.
+    private mutating func absorbUsage(from prompt: OpenCodePromptResult) {
+        guard let usageValue = prompt.raw["usage"], case .object(let members) = usageValue else { return }
+        if let input = members["inputTokens"]?.intValue { usage.inputTokens = input }
+        if let output = members["outputTokens"]?.intValue { usage.outputTokens = output }
+        if let cached = members["cachedReadTokens"]?.intValue { usage.cacheReadTokens = cached }
+        if let thought = members["thoughtTokens"]?.intValue { usage.thinkingTokens = thought }
     }
 
     private mutating func flushOpenBlocks() -> [AgentEvent] {
@@ -472,21 +475,38 @@ public struct OpenCodeToolCall: Sendable, Hashable {
         self.json = json
     }
 
-    public static func decode(_ value: JSONValue) -> OpenCodeToolCall? {
-        guard case .object(let object) = value else { return nil }
-        
+    public static func decode(_ json: JSONValue, isUpdate: Bool) -> OpenCodeToolCall {
+        let locations = json["locations"]?.arrayValue ?? []
+        let path = json["rawInput"]?["path"]?.stringValue
+            ?? json["rawInput"]?["file_path"]?.stringValue
+            ?? locations.first?["path"]?.stringValue
+            ?? ""
         return OpenCodeToolCall(
-            id: object["id"]?.stringValue ?? "",
-            title: object["title"]?.stringValue ?? "",
-            kind: object["kind"]?.stringValue ?? "",
-            status: object["status"]?.stringValue ?? "",
-            toolName: object["toolName"]?.stringValue ?? "",
-            rawInput: object["input"] ?? .null,
-            rawOutput: object["output"] ?? .null,
-            contentText: object["contentText"]?.stringValue ?? "",
-            path: object["path"]?.stringValue ?? "",
-            json: value
+            id: json["toolCallId"]?.stringValue ?? "",
+            title: json["title"]?.stringValue ?? "",
+            kind: json["kind"]?.stringValue ?? "",
+            status: json["status"]?.stringValue ?? (isUpdate ? "" : "pending"),
+            toolName: json["toolName"]?.stringValue ?? "",
+            rawInput: json["rawInput"] ?? .object([:]),
+            rawOutput: json["rawOutput"] ?? .null,
+            contentText: contentText(json["content"]),
+            path: path,
+            json: json
         )
+    }
+
+    /// Tool content is an array of `{ type, content }` / `{ type, text }` blocks on the update.
+    /// Flattened to one string so a result row has something to show without Bloom having to
+    /// understand every ACP content kind.
+    static func contentText(_ json: JSONValue?) -> String {
+        guard let items = json?.arrayValue else {
+            return json?["text"]?.stringValue ?? json?.stringValue ?? ""
+        }
+        return items.compactMap { item in
+            if let text = item["content"]?["text"]?.stringValue { return text }
+            if let text = item["text"]?.stringValue { return text }
+            return nil
+        }.joined(separator: "\n")
     }
 }
 
@@ -524,8 +544,8 @@ extension OpenCodeEvent {
         switch self {
         case .promptResponse(let result):
             return result.sessionID
-        case .sessionUpdate(let notification):
-            return notification.params["sessionId"]?.stringValue ?? ""
+        case .sessionUpdate(let update):
+            return update.sessionID
         case .sessionStatus(let notification):
             return notification.params["sessionId"]?.stringValue ?? ""
         case .sessionEnded(let notification):
@@ -547,9 +567,10 @@ extension OpenCodeEvent {
     static func sessionReady(_ session: OpenCodeSession) -> OpenCodeEvent {
         // This is a synthetic event for translation purposes
         // In practice, session readiness comes from newSession/resumeSession responses
-        return .sessionUpdate(OpenCodeServerNotification(
-            method: "session/ready",
-            params: .object([
+        return .sessionUpdate(OpenCodeSessionUpdate(
+            sessionID: session.id,
+            kind: .other("sessionReady"),
+            raw: .object([
                 "sessionId": .string(session.id),
                 "currentModelID": .string(session.currentModelID),
             ])

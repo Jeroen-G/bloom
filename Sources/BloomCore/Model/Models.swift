@@ -738,7 +738,7 @@ public enum AgentKind: String, Sendable, Codable, CaseIterable, Identifiable {
         case .codex: return "\(home)/.codex/config.toml"
         case .grok: return "\(home)/.grok/config.toml"
         case .cursor: return "\(home)/.cursor"
-        case .openCode: return "\(home)/.opencode"
+        case .openCode: return "\(home)/.config/opencode"
         }
     }
 
@@ -799,10 +799,12 @@ public enum AgentKind: String, Sendable, Codable, CaseIterable, Identifiable {
     /// Codex's `turn/steer` is. The TUI can interject; this wire has not been shown to. Queuing
     /// until the turn ends is the honest default, and a measurement that says otherwise flips this.
     ///
-    /// **Cursor: no**, and not as a judgement about the CLI. Cursor has no runner, OpenCode has a runner and supports mid-turn messages via ACP.
+    /// **Cursor: no**, and not as a judgement about the CLI. Cursor has no runner,
     /// so there is no turn to write into and no wire to write on. This answers `false` for the
     /// same reason `canRunWorkspaces` does, and a backend that grows a runner has to measure this
     /// rather than inherit it.
+    ///
+    /// **OpenCode: yes.** OpenCode has a runner and supports mid-turn messages via ACP.
     ///
     /// **What this is NOT.** It does not widen `DeliveryHold.question` or `DeliveryHold.setup`,
     /// neither of which is about the backend: a turn blocked on a permission answer is not

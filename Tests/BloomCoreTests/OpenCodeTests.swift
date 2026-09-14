@@ -212,6 +212,70 @@ struct OpenCodeClientTests {
         #expect(mcp.count == 1)
         #expect(mcp[0]["name"]?.stringValue == "mcp")
     }
+
+    @Test
+    func v2SessionNewAdvertisesModelsFromConfigOptions() async throws {
+        // OpenCode v2 names no models in `initialize`; the `session/new` response carries the
+        // model list in `configOptions`. Regression test: before this shape was read, the
+        // composer's OpenCode section was empty and only Claude Code's built-in list showed.
+        let box = ProcessBox()
+        box.reply(to: "initialize", with: .object([
+            "protocolVersion": .integer(1),
+            "agentCapabilities": .object([:]),
+            "agentInfo": .object(["name": .string("OpenCode"), "version": .string("2.0.3")]),
+            "authMethods": .array([]),
+        ]))
+        box.reply(to: "session/new", with: .object([
+            "sessionId": .string("sess-v2"),
+            "configOptions": .array([
+                .object([
+                    "id": .string("model"),
+                    "name": .string("Model"),
+                    "type": .string("select"),
+                    "currentValue": .string("opencode/gpt-5.6-sol"),
+                    "options": .array([
+                        .object([
+                            "value": .string("opencode/gpt-5.6-sol"),
+                            "name": .string("opencode/GPT-5.6 Sol (50% Off)"),
+                        ]),
+                        .object([
+                            "value": .string("opencode/gpt-5.5"),
+                            "name": .string("opencode/GPT-5.5"),
+                        ]),
+                    ]),
+                ]),
+                .object([
+                    "id": .string("effort"),
+                    "name": .string("Effort"),
+                    "type": .string("select"),
+                    "currentValue": .string("default"),
+                    "options": .array([
+                        .object(["value": .string("low"), "name": .string("Low")]),
+                        .object(["value": .string("default"), "name": .string("Default")]),
+                    ]),
+                ]),
+            ]),
+        ]))
+        let client = OpenCodeClient(
+            configuration: OpenCodeClient.Configuration(cwd: "/tmp/w"),
+            makeProcess: box.factory
+        )
+        try await client.start()
+        // v2's initialize response carries no modelState, so nothing is advertised yet.
+        #expect(await client.advertisedModels().isEmpty)
+
+        let session = try await client.newSession(cwd: "/tmp/w")
+        #expect(session.id == "sess-v2")
+
+        let models = await client.advertisedModels()
+        #expect(models.map(\.id) == ["opencode/gpt-5.6-sol", "opencode/gpt-5.5"])
+        #expect(models[0].isDefault)
+        #expect(models[0].displayName == "GPT-5.6 Sol (50% Off)")
+        #expect(models[0].supportedEfforts.map(\.id) == ["low", "default"])
+        #expect(models[0].defaultEffort == "default")
+        #expect(box.process.sentMethods.contains("session/new"))
+        await client.stop()
+    }
 }
 
 // MARK: - OpenCodeSession Tests
@@ -350,6 +414,118 @@ struct OpenCodeTranslationTests {
         
         #expect(json?["agent_kind"] as? String == "openCode")
         #expect(json?["session_id"] as? String == "test")
+    }
+
+    @Test
+    func textChunksStreamAndFlushAsAssistantRow() {
+        // Regression: OpenCode v2 streams `session/update` notifications with an `update` object
+        // discriminating on `sessionUpdate`. Before the typed decode, the translation read flat
+        // `params["content"]` and produced nothing, so chat worked but the reply never appeared.
+        var translation = OpenCodeTranslation(context: OpenCodeTranslation.Context(model: "gpt-4"))
+        let first = translation.translate(.sessionUpdate(OpenCodeSessionUpdate(
+            sessionID: "sess-1",
+            kind: .text("Hel"),
+            raw: .object([:])
+        )))
+        #expect(first.contains { if case .streamDelta(.text("Hel")) = $0 { return true }; return false })
+        let second = translation.translate(.sessionUpdate(OpenCodeSessionUpdate(
+            sessionID: "sess-1",
+            kind: .text("lo"),
+            raw: .object([:])
+        )))
+        #expect(second.contains { if case .streamDelta(.text("lo")) = $0 { return true }; return false })
+        let done = translation.translate(.promptResponse(OpenCodePromptResult(
+            requestID: .number(1),
+            sessionID: "sess-1",
+            stopReason: "end_turn",
+            raw: .object(["usage": .object([
+                "inputTokens": .integer(9160),
+                "outputTokens": .integer(2),
+                "totalTokens": .integer(9162),
+            ])])
+        )))
+        let flushed = done.compactMap { event -> String? in
+            if case .assistantText(let block) = event { return block.text }
+            return nil
+        }.first
+        #expect(flushed == "Hello")
+        #expect(done.contains { if case .result(let result) = $0 { return !result.isError }; return false })
+    }
+
+    @Test
+    func thoughtChunksStreamAsThinking() {
+        var translation = OpenCodeTranslation()
+        let events = translation.translate(.sessionUpdate(OpenCodeSessionUpdate(
+            sessionID: "sess-1",
+            kind: .thought("Let me reason"),
+            raw: .object([:])
+        )))
+        #expect(events.contains { if case .streamDelta(.thinking("Let me reason")) = $0 { return true }; return false })
+    }
+
+    @Test
+    func toolCallStreamMapsToRead() {
+        // The verified v2 wire names the tool under `toolCallId` and `title`, carries input in
+        // `rawInput`, and locates the file under `rawInput.path` / `locations`.
+        var translation = OpenCodeTranslation(context: OpenCodeTranslation.Context(model: "gpt-4"))
+        _ = translation.translate(.sessionUpdate(OpenCodeSessionUpdate(
+            sessionID: "sess-1",
+            kind: .toolCall(OpenCodeToolCall.decode(.object([
+                "toolCallId": .string("call_1"),
+                "title": .string("read"),
+                "kind": .string("read"),
+                "status": .string("pending"),
+                "rawInput": .object(["path": .string("src/main.rs")]),
+            ]), isUpdate: false)),
+            raw: .object([:])
+        )))
+        // The completed update emits a tool result row whose text comes from the content blocks.
+        let completed = translation.translate(.sessionUpdate(OpenCodeSessionUpdate(
+            sessionID: "sess-1",
+            kind: .toolCallUpdate(OpenCodeToolCall.decode(.object([
+                "toolCallId": .string("call_1"),
+                "status": .string("completed"),
+                "content": .array([
+                    .object([
+                        "type": .string("content"),
+                        "content": .object(["type": .string("text"), "text": .string("11 lines")]),
+                    ]),
+                ]),
+            ]), isUpdate: true)),
+            raw: .object([:])
+        )))
+        let toolRows = completed.compactMap { event -> AgentToolResult? in
+            if case .toolResult(let row) = event { return row }
+            return nil
+        }
+        #expect(toolRows.count == 1)
+        #expect(toolRows[0].toolUseID == "call_1")
+        #expect(toolRows[0].text.contains("11 lines"))
+    }
+
+    @Test
+    func usageUpdateSetsContextThenResponseOverridesTokens() {
+        var translation = OpenCodeTranslation()
+        _ = translation.translate(.sessionUpdate(OpenCodeSessionUpdate(
+            sessionID: "sess-1",
+            kind: .usage(used: 9162, size: 1000000),
+            raw: .object([:])
+        )))
+        #expect(translation.usage.contextTokens == 1000000)
+        #expect(translation.usage.inputTokens == 9162)
+        // The prompt response carries the definitive per-turn split and replaces the streaming sum.
+        _ = translation.translate(.promptResponse(OpenCodePromptResult(
+            requestID: .number(1),
+            sessionID: "sess-1",
+            stopReason: "end_turn",
+            raw: .object(["usage": .object([
+                "inputTokens": .integer(9160),
+                "outputTokens": .integer(2),
+                "totalTokens": .integer(9162),
+            ])])
+        )))
+        #expect(translation.usage.inputTokens == 9160)
+        #expect(translation.usage.outputTokens == 2)
     }
 }
 
