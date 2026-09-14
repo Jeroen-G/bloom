@@ -9,6 +9,7 @@ struct ExecutableSearchPathTests {
         let paths = ExecutableSearchPath.additionalDirectories(home: home, childrenOf: { _ in [] })
 
         #expect(paths.contains("\(home)/.local/bin"))
+        #expect(paths.contains("\(home)/.opencode/bin"))
         #expect(paths.contains("\(home)/.local/share/mise/shims"))
         #expect(paths.contains("\(home)/.asdf/shims"))
         #expect(paths.contains("\(home)/Library/pnpm"))

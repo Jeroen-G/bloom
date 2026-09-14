@@ -47,7 +47,7 @@ struct DeliveryHoldTests {
         #expect(hold.allowsDelivery(on: .claudeCode))
         #expect(hold.allowsDelivery(on: .codex))
         #expect(!hold.allowsDelivery(on: .cursor))
-        #expect(!hold.allowsDelivery(on: .openCode))
+        #expect(hold.allowsDelivery(on: .openCode))
         for agent in AgentKind.allCases {
             #expect(hold.allowsDelivery(on: agent) == agent.acceptsMidTurnMessage)
         }

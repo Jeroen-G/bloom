@@ -27,6 +27,7 @@ public enum ExecutableSearchPath {
             "/usr/sbin",
             "/sbin",
             "\(home)/.local/bin",
+            "\(home)/.opencode/bin",
             "\(home)/.npm-packages/bin",
             "\(home)/.volta/bin",
             "\(home)/.yarn/bin",

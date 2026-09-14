@@ -24,7 +24,7 @@ import Foundation
     /// A stale menu or a deep link cannot put a chat on a backend with no runner.
     @Test func aBackendWithNoRunnerIsNotADestination() {
         #expect(BackendChange.decide(from: .claudeCode, to: .cursor, hasSpoken: false) == .unchanged)
-        #expect(BackendChange.decide(from: .claudeCode, to: .openCode, hasSpoken: true) == .unchanged)
+        #expect(BackendChange.decide(from: .claudeCode, to: .openCode, hasSpoken: true) == .fork(.openCode))
     }
 
     /// The reported bug, from the side the core can hold: an older chat whose transcript has not

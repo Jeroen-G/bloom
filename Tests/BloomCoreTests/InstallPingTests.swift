@@ -221,17 +221,20 @@ struct InstallPingTests {
         // Always in `allCases` order, so the same machine sends the same name every day.
         #expect(InstallPing.agentName(installed: [.codex, .claudeCode]) == "claude_codex")
         #expect(InstallPing.agentName(installed: [.grok]) == "grok")
+        #expect(InstallPing.agentName(installed: [.openCode]) == "opencode")
         #expect(InstallPing.agentName(installed: [.claudeCode, .codex, .grok]) == "claude_codex_grok")
+        #expect(InstallPing.agentName(installed: [.claudeCode, .grok, .openCode]) == "claude_grok_opencode")
         // And still a name the endpoint accepts, which is the only reason `_` is the separator.
         #expect(InstallPing.matches("claude_codex", InstallPing.namePattern))
         #expect(InstallPing.matches("claude_codex_grok", InstallPing.namePattern))
+        #expect(InstallPing.matches("claude_grok_opencode", InstallPing.namePattern))
     }
 
     /// Having `cursor-agent` on `PATH` is not Bloom using Cursor.
     @Test("does not claim an agent Bloom cannot run a turn with")
     func otherCLIsAreNotTheAgent() {
-        #expect(InstallPing.agentName(installed: [.cursor, .openCode]) == "none")
-        #expect(InstallPing.agentName(installed: [.codex, .cursor, .openCode]) == "codex")
+        #expect(InstallPing.agentName(installed: [.cursor]) == "none")
+        #expect(InstallPing.agentName(installed: [.codex, .cursor]) == "codex")
     }
 
     @Test("says so when nothing is installed to run")

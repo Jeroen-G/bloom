@@ -80,11 +80,20 @@ Login command: `grok login`.
 
 ## Cursor and OpenCode
 
-Not installed here, so nothing about their auth files is verified. Detect the binary and show the
-version if present. Do NOT invent an auth file format for them: show "Connected" only when there
-is real evidence, otherwise show that the CLI was found and leave the account block out. Cursor's
-config directory is `~/.cursor` (exists here, holds `hooks.json`). OpenCode's is `~/.opencode`
-(absent here).
+Cursor is not installed here, so nothing about its auth file is verified. Detect the binary and
+show the version if present. Do NOT invent an auth file format for it: show "Connected" only when
+there is real evidence, otherwise show that the CLI was found and leave the account block out.
+Cursor's config directory is `~/.cursor` (exists here, holds `hooks.json`).
+
+OpenCode's auth **is** verified against opencode v2. Account facts live in
+`~/.local/share/opencode/auth.json` (the `~/.config/opencode` directory only holds config files),
+as a map of provider id to credential object, for example
+`{"google": {"type": "oauth", "expires": …}, "ollama": {"type": "api"}, …}`. The credential's
+`type` — `"api"` or `"oauth"` — decides how that provider is authenticated, and oauth expiry is
+the latest `expires` value across credentials. `key`, `refresh` and `access` are live credentials
+and must never be rendered. An `OPENCODE_API_KEY` in the environment means API key auth instead,
+and takes precedence in what is displayed when no auth file is present. The official install
+script places the binary in `~/.opencode/bin`, which Bloom resolves on Finder-launched PATHs.
 
 ## What Bloom can actually run
 

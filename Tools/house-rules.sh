@@ -295,6 +295,11 @@ id_type_allowed_files=(
   'Sources/BloomCore/Agent/Grok/GrokEvent.swift'     # Grok's ACP session and tool-call ids
   'Sources/BloomCore/Agent/Grok/GrokClient.swift'    # the same protocol's request envelopes
   'Sources/BloomCore/Agent/Grok/GrokRunner.swift'    # Grok session ids assigned by that server
+  'Sources/BloomCore/Agent/OpenCode/OpenCodeClient.swift'  # OpenCode's ACP session and model ids
+  'Sources/BloomCore/Agent/OpenCode/OpenCodeModelCatalog.swift' # the same protocol's model ids
+  'Sources/BloomCore/Agent/OpenCode/OpenCodePermission.swift' # the same protocol's permission ids
+  'Sources/BloomCore/Agent/OpenCode/OpenCodeRunner.swift'  # OpenCode session ids assigned by that server
+  'Sources/BloomCore/Agent/OpenCode/OpenCodeTranslation.swift' # the same protocol's tool-call ids
   'Sources/BloomCore/Agent/AgentRetry.swift'   # the same stream-json, one line of it
 )
 # Names that are never a Bloom row, wherever they appear. This list should only

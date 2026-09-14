@@ -16,6 +16,7 @@ public enum SetupTool: String, Sendable, Hashable, CaseIterable, Identifiable, C
     case claudeCode
     case codex
     case grok
+    case openCode
     case gitHub
 
     public var id: String { rawValue }
@@ -29,6 +30,7 @@ public enum SetupTool: String, Sendable, Hashable, CaseIterable, Identifiable, C
         case .claudeCode: .claudeCode
         case .codex: .codex
         case .grok: .grok
+        case .openCode: .openCode
         case .git, .gitHub: nil
         }
     }
@@ -40,6 +42,7 @@ public enum SetupTool: String, Sendable, Hashable, CaseIterable, Identifiable, C
         case .claudeCode: "Claude Code"
         case .codex: "Codex"
         case .grok: "Grok"
+        case .openCode: "OpenCode"
         case .gitHub: "GitHub CLI"
         }
     }
@@ -50,7 +53,7 @@ public enum SetupTool: String, Sendable, Hashable, CaseIterable, Identifiable, C
     public var sentenceName: String {
         switch self {
         case .gitHub: "the GitHub CLI"
-        case .git, .claudeCode, .codex, .grok: title
+        case .git, .claudeCode, .codex, .grok, .openCode: title
         }
     }
 
@@ -69,6 +72,8 @@ public enum SetupTool: String, Sendable, Hashable, CaseIterable, Identifiable, C
             "OpenAI's agent. Bloom can drive a workspace with it instead of Claude Code."
         case .grok:
             "xAI's agent. Bloom can drive a workspace with it instead of Claude Code or Codex."
+        case .openCode:
+            "The open-source agent. Bloom can drive a workspace with it instead of Claude Code."
         case .gitHub:
             "Pull requests, checks and merges. Everything else in Bloom works without it."
         }
@@ -78,14 +83,14 @@ public enum SetupTool: String, Sendable, Hashable, CaseIterable, Identifiable, C
     public var executableName: String {
         switch self {
         case .git: "git"
-        case .claudeCode, .codex, .grok: agentKind?.executableName ?? rawValue
+        case .claudeCode, .codex, .grok, .openCode: agentKind?.executableName ?? rawValue
         case .gitHub: "gh"
         }
     }
 
     /// The order the window lists them in: the flat requirement, then the agents, then the one
     /// that is optional. Reading down the column is reading down the strength of the ask.
-    public static let displayOrder: [SetupTool] = [.git, .claudeCode, .codex, .grok, .gitHub]
+    public static let displayOrder: [SetupTool] = [.git, .claudeCode, .codex, .grok, .openCode, .gitHub]
 }
 
 // MARK: - How a tool turned out
@@ -240,6 +245,21 @@ public extension SetupCheck {
                 isInteractive: true
             )
 
+        case (.openCode, .missing):
+            return SetupFix(
+                summary: "Install OpenCode",
+                command: "curl -fsSL https://opencode.ai/install | bash",
+                url: URL(string: "https://opencode.ai/docs")
+            )
+
+        case (.openCode, .needsSignIn):
+            return SetupFix(
+                summary: "Sign in to OpenCode",
+                command: AgentKind.openCode.loginCommand,
+                url: nil,
+                isInteractive: true
+            )
+
         case (.gitHub, .missing):
             return SetupFix(
                 summary: "Install the GitHub CLI",
@@ -351,7 +371,7 @@ public struct SetupReport: Sendable, Hashable {
         switch tool {
         case .git:
             return .problem
-        case .claudeCode, .codex, .grok:
+        case .claudeCode, .codex, .grok, .openCode:
             // A missing agent is only a problem when it is the LAST agent. While the other row is
             // still being looked at, this one holds its tongue rather than flashing red and going
             // quiet again half a second later.

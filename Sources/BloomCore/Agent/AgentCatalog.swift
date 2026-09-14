@@ -274,9 +274,17 @@ public actor AgentCatalog {
                 version: version,
                 apiKeyIsSet: !(key ?? "").isEmpty
             )
-        case .cursor, .openCode:
-            // Their auth file formats are not verified, so claiming an account would be a guess.
+        case .cursor:
+            // Auth file format is not verified, so claiming an account would be a guess.
             details = []
+        case .openCode:
+            // Auth lives in the XDG data directory, not alongside the config files.
+            let key = ProcessInfo.processInfo.environment["OPENCODE_API_KEY"]
+            details = opencodeDetails(
+                authJSON: readFile(opencodeAuthPath),
+                version: version,
+                apiKeyIsSet: !(key ?? "").isEmpty
+            )
         }
 
         return AgentStatus(
@@ -292,6 +300,7 @@ public actor AgentCatalog {
     static var claudeAccountPath: String { "\(NSHomeDirectory())/.claude.json" }
     static var codexAuthPath: String { "\(NSHomeDirectory())/.codex/auth.json" }
     static var grokAuthPath: String { "\(NSHomeDirectory())/.grok/auth.json" }
+    static var opencodeAuthPath: String { "\(NSHomeDirectory())/.local/share/opencode/auth.json" }
 
     private static func readFile(_ path: String) -> Data? {
         FileManager.default.contents(atPath: path)
@@ -589,4 +598,126 @@ public actor AgentCatalog {
         guard FileManager.default.fileExists(atPath: expanded) else { return nil }
         return URL(fileURLWithPath: expanded).resolvingSymlinksInPath().path
     }
+
+    // MARK: - OpenCode
+
+    /// Builds the OpenCode account table from `~/.local/share/opencode/auth.json`.
+    ///
+    /// Verified against opencode v2: a map of provider id to credential. The credential's `type`
+    /// (`api` or `oauth`) tells how that provider is authenticated; `key`/`refresh`/`access` are
+    /// live credentials and are never read.
+    public static func opencodeDetails(
+        authJSON: Data?,
+        version: String?,
+        apiKeyIsSet: Bool
+    ) -> [AgentDetail] {
+        let account = authJSON.flatMap(decodeOpenCodeAuth)
+        guard account != nil || apiKeyIsSet else { return [] }
+
+        var details = [
+            AgentDetail(label: "Version", value: version ?? unknown),
+            AgentDetail(label: "Provider", value: apiKeyIsSet && account == nil ? "OpenCode API key" : "OpenCode"),
+        ]
+
+        var methods: [String] = []
+        if apiKeyIsSet {
+            methods.append("API key (OPENCODE_API_KEY set)")
+        }
+        if let account {
+            var seen = Set<String>()
+            for type in account.providers.map(\.authType) where seen.insert(type).inserted {
+                methods.append(opencodeLoginMethod(type))
+            }
+        }
+        if !methods.isEmpty {
+            details.append(AgentDetail(
+                label: "Login method",
+                value: methods.joined(separator: " + ")
+            ))
+        }
+
+        if let account {
+            details.append(AgentDetail(
+                label: "Accounts",
+                value: account.providers.map(\.id).joined(separator: ", ")
+            ))
+            if account.isExpired(at: Date()) {
+                details.append(AgentDetail(
+                    label: "Session",
+                    value: "Expired, sign in again with `opencode auth login`"
+                ))
+            }
+        }
+
+        return details
+    }
+
+    static func opencodeLoginMethod(_ authType: String) -> String {
+        switch authType {
+        case "oauth": return "OpenCode login"
+        case "api": return "API key"
+        case let type where !type.isEmpty: return titleCased(type)
+        default: return "OpenCode login"
+        }
+    }
+
+    public struct OpenCodeProvider: Sendable, Hashable {
+        public var id: String
+        public var authType: String
+
+        public init(id: String, authType: String) {
+            self.id = id
+            self.authType = authType
+        }
+    }
+
+    public struct OpenCodeAccount: Sendable, Hashable {
+        public var providers: [OpenCodeProvider]
+        public var expiresAt: Date?
+
+        public init(providers: [OpenCodeProvider] = [], expiresAt: Date? = nil) {
+            self.providers = providers
+            self.expiresAt = expiresAt
+        }
+
+        public func isExpired(at now: Date) -> Bool {
+            guard let expiresAt else { return false }
+            return expiresAt < now
+        }
+    }
+
+    /// Decodes the verified opencode v2 auth file: a map of provider id
+    /// (`ollama`, `google`, `opencode`, ...) to a credential object whose `type`
+    /// is `"api"` or `"oauth"`.
+    public static func decodeOpenCodeAuth(_ data: Data) -> OpenCodeAccount? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        var providers: [OpenCodeProvider] = []
+        var expiry: Date?
+        for id in root.keys.sorted() {
+            guard let credential = root[id] as? [String: Any],
+                  let authType = nonEmpty(credential["type"] as? String)
+            else { continue }
+            providers.append(OpenCodeProvider(id: id, authType: authType))
+            guard let expires = credential["expires"] else { continue }
+            let candidate: Date?
+            if let seconds = expires as? NSNumber {
+                candidate = Date(timeIntervalSince1970: seconds.doubleValue)
+            } else if let text = expires as? String {
+                candidate = ISO8601DateFormatter().date(from: text)
+            } else {
+                candidate = nil
+            }
+            if let candidate {
+                if expiry == nil || candidate > expiry! {
+                    expiry = candidate
+                }
+            }
+        }
+        guard !providers.isEmpty else { return nil }
+        return OpenCodeAccount(providers: providers, expiresAt: expiry)
+    }
+
 }
+

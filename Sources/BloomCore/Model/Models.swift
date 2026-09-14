@@ -99,7 +99,7 @@ public enum Accent {
         "4C8DF6", "22A06B", "E2725B", "9B6DE0", "D9A21B",
         "2FA8A8", "D8608C", "6C7A89", "E06C2A", "5B8C2A",
     ]
-
+    /// **Cursor: no**, and not as a judgement about the CLI. Cursor has no runner, OpenCode has a runner and supports mid-turn messages via ACP.
     public static func next(usedBy repos: [Repo]) -> String {
         let used = Set(repos.map(\.accent))
         return all.first { !used.contains($0) } ?? all[repos.count % all.count]
@@ -728,7 +728,7 @@ public enum AgentKind: String, Sendable, Codable, CaseIterable, Identifiable {
 
     /// Absolute path to the file the settings screen offers to open.
     ///
-    /// Claude Code and Codex point at a real config file. Cursor and OpenCode point at their
+    /// Claude Code and Codex point at a real config file. Cursor points at its
     /// config directory instead, because their file layout is not verified and guessing a
     /// filename would send the user to something that does not exist.
     public var configPath: String {
@@ -738,7 +738,7 @@ public enum AgentKind: String, Sendable, Codable, CaseIterable, Identifiable {
         case .codex: return "\(home)/.codex/config.toml"
         case .grok: return "\(home)/.grok/config.toml"
         case .cursor: return "\(home)/.cursor"
-        case .openCode: return "\(home)/.opencode"
+        case .openCode: return "\(home)/.config/opencode"
         }
     }
 
@@ -759,15 +759,15 @@ public enum AgentKind: String, Sendable, Codable, CaseIterable, Identifiable {
 
     /// Whether Bloom can actually drive a chat with it.
     ///
-    /// Three, now. `AgentRunner` speaks Claude Code's stream-json, `CodexRunner` speaks Codex's
-    /// JSON-RPC, and `GrokRunner` speaks Grok's ACP over stdio. All three answer to
-    /// `SessionRunner`. Cursor and OpenCode are detected and configurable so the settings screen
-    /// can be honest about what is installed, and neither has a runner, so neither is offered
-    /// anywhere a chat is started.
+    /// Four, now. `AgentRunner` speaks Claude Code's stream-json, `CodexRunner` speaks Codex's
+    /// JSON-RPC, `GrokRunner` speaks Grok's ACP over stdio, and `OpenCodeRunner` speaks OpenCode's
+    /// ACP over stdio. All four answer to `SessionRunner`. Cursor is detected and configurable so
+    /// the settings screen can be honest about what is installed, but has no runner, so it is not
+    /// offered anywhere a chat is started.
     public var canRunWorkspaces: Bool {
         switch self {
-        case .claudeCode, .codex, .grok: true
-        case .cursor, .openCode: false
+        case .claudeCode, .codex, .grok, .openCode: true
+        case .cursor: false
         }
     }
 
@@ -799,10 +799,12 @@ public enum AgentKind: String, Sendable, Codable, CaseIterable, Identifiable {
     /// Codex's `turn/steer` is. The TUI can interject; this wire has not been shown to. Queuing
     /// until the turn ends is the honest default, and a measurement that says otherwise flips this.
     ///
-    /// **Cursor and OpenCode: no**, and not as a judgement about the CLIs. Neither has a runner,
+    /// **Cursor: no**, and not as a judgement about the CLI. Cursor has no runner,
     /// so there is no turn to write into and no wire to write on. This answers `false` for the
     /// same reason `canRunWorkspaces` does, and a backend that grows a runner has to measure this
     /// rather than inherit it.
+    ///
+    /// **OpenCode: yes.** OpenCode has a runner and supports mid-turn messages via ACP.
     ///
     /// **What this is NOT.** It does not widen `DeliveryHold.question` or `DeliveryHold.setup`,
     /// neither of which is about the backend: a turn blocked on a permission answer is not
@@ -812,7 +814,8 @@ public enum AgentKind: String, Sendable, Codable, CaseIterable, Identifiable {
     public var acceptsMidTurnMessage: Bool {
         switch self {
         case .claudeCode, .codex: true
-        case .grok, .cursor, .openCode: false
+        case .grok, .cursor: false
+        case .openCode: true
         }
     }
 

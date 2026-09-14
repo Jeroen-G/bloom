@@ -235,3 +235,73 @@ struct LiveNamingTests {
         #expect(Date().timeIntervalSince(started) < 60)
     }
 }
+
+/// The OpenCode model list, against the real `opencode` binary.
+///
+/// Same bargain as the rest of this file: needs opencode installed and a provider configured, so
+/// it only runs when asked for. It exists because the composer's OpenCode section used to be empty
+/// through two separate faults — Bloom could not find the binary (the official installer puts it
+/// in `~/.opencode/bin`, off a Finder-launched PATH) and then did not read the v2 `session/new`
+/// `configOptions` shape — and a captured envelope proves neither end of that chain.
+///
+///     BLOOM_LIVE=1 ./Tools/test-core.sh LiveOpenCode
+@Suite("LiveOpenCode", .enabled(if: liveEnabled), .tags(.subprocess))
+struct LiveOpenCodeTests {
+    @Test("advertises models and effort levels from the installed opencode binary", .timeLimit(.minutes(2)))
+    func advertisesModels() async throws {
+        let cwd = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bloom-opencode-live-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cwd) }
+
+        let catalog = OpenCodeModelCatalog.live(cwd: cwd.path, store: nil)
+        let models = try await catalog.models()
+
+        #expect(!models.isEmpty, "opencode advertised no models; is a provider configured?")
+        #expect(models.filter(\.isDefault).count == 1, "expected exactly one default model")
+        // The v2 session response also carries the effort levels every model shares.
+        #expect(models.contains { !$0.supportedEfforts.isEmpty }, "no model advertised effort levels")
+    }
+
+    @Test("streams an assistant reply into Bloom text events", .timeLimit(.minutes(3)))
+    func streamsReply() async throws {
+        let cwd = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bloom-opencode-live-stream-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cwd) }
+
+        let client = OpenCodeClient(configuration: OpenCodeClient.Configuration(cwd: cwd.path))
+        try await client.start()
+        defer { Task { await client.stop() } }
+        let session = try await client.newSession(cwd: cwd.path)
+
+        // Regression: opencode v2 streams the reply as `session/update` notifications whose
+        // `update` object discriminates on `sessionUpdate == "agent_message_chunk"`. Before the
+        // typed decode, Bloom received these notifications and produced nothing, so chat appeared
+        // to work but the response never surfaced. This test watches the client's own stream for
+        // the text chunks that used to be dropped.
+        let events = client.events
+        var streamed: [String] = []
+        var sawResult = false
+        var iterator = events.makeAsyncIterator()
+        _ = try await client.beginPrompt(
+            sessionID: session.id,
+            text: "Reply with the single word OK and nothing else. Do not use any tools."
+        )
+        let deadline = Date().addingTimeInterval(120)
+        while Date() < deadline, !sawResult {
+            switch await iterator.next() {
+            case .sessionUpdate(let update):
+                if case .text(let chunk) = update.kind, !chunk.isEmpty { streamed.append(chunk) }
+            case .promptResponse:
+                sawResult = true
+            case .promptError:
+                sawResult = true
+            default:
+                break
+            }
+        }
+        #expect(sawResult, "the turn never completed through ACP")
+        #expect(!streamed.isEmpty, "assistant text never streamed into Bloom")
+    }
+}
